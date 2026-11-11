@@ -219,7 +219,7 @@ fun downloadFile(url: String, destFile: File) {
 
 registerDownloadTask(
     taskName = "downloadKpimg",
-    srcUrl = "https://github.com/bmax121/KernelPatch/releases/download/$kernelPatchVersion/kpimg-android",
+    srcUrl = "https://github.com/VastCoreOS3/KernelPatch_0.13.9/releases/download/$kernelPatchVersion/kpimg-android",
     destPath = "${project.projectDir}/src/main/assets/kpimg",
     project = project
 )
