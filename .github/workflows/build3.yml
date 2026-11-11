@@ -1,0 +1,201 @@
+name: Build Manager 3
+
+on:
+  push:
+    tags: [ "*" ]
+    branches: [ "main", "dev" ]
+    paths:
+      - '.github/workflows/build.yml'
+      - 'app/**'
+      - 'apd/**'
+      - 'build.gradle.kts'
+      - 'gradle/libs.versions.toml'
+  pull_request:
+    branches: [ "main", "dev" ]
+    paths:
+      - '.github/workflows/build.yml'
+      - 'app/**'
+      - 'apd/**'
+      - 'build.gradle.kts'
+      - 'gradle/libs.versions.toml'
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  build-manager:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: KernelPatch info
+        id: kp_info
+        run: |
+          KP_VERSION=$(awk '/#define MAJOR/{m=$3} /#define MINOR/{n=$3} /#define PATCH/{p=$3} END{print m"."n"."p}' app/src/main/cpp/version)
+          KP_HASH=$(git ls-remote https://github.com/bmax121/KernelPatch.git "refs/tags/${KP_VERSION}" | cut -c1-7)
+          echo "KP_VERSION=${KP_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "KP_HASH=${KP_HASH}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate version
+        id: parse_version
+        run: |
+          COMMIT_NUM=$(git rev-list --count HEAD)
+          VERSION=$(echo "$COMMIT_NUM + 200 + 10000" | bc)
+          echo "Generated Version: $VERSION"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Setup Java
+        # The ubuntu runner image already ships Temurin 21. Use it instead of
+        # actions/setup-java: its jetbrains distribution lists JBR releases on
+        # api.github.com and reads process.env.GITHUB_TOKEN directly, so the lookup
+        # is anonymous (60 requests/h per egress IP) and trips on shared runner IPs.
+        run: |
+          if [ -z "${JAVA_HOME_21_X64:-}" ]; then
+            echo "::error::JAVA_HOME_21_X64 is not set on this runner"
+            ls -1 /usr/lib/jvm || true
+            exit 1
+          fi
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
+          "$JAVA_HOME_21_X64/bin/java" -version
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+
+      - name: Install toolchain
+        run: |
+          rustup default stable
+          rustup update stable
+          cargo install cargo-ndk
+          rustup target install aarch64-linux-android
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apd
+          cache-targets: false
+
+      - name: Build with Gradle
+        run: |
+          echo 'org.gradle.parallel=true' >> gradle.properties
+          echo 'org.gradle.vfs.watch=true' >> gradle.properties
+          echo 'org.gradle.jvmargs=-Xmx2048m' >> gradle.properties
+          echo 'android.native.buildOutput=verbose' >> gradle.properties
+          sed -i 's/org.gradle.configuration-cache=true//g' gradle.properties
+          ./gradlew clean assembleDebug assembleRelease
+          echo "BUILD_TOOL_VERSION=$(ls /usr/local/lib/android/sdk/build-tools/ | tail -n 1)" >> $GITHUB_ENV
+
+      - name: Sign Release (v2 only)
+        id: sign_app
+        if: ${{ env.SIGNING_KEY != '' }}
+        continue-on-error: true
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          BUILD_TOOLS_VERSION: ${{ env.BUILD_TOOL_VERSION }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "$SIGNING_KEY" | base64 -d > "$RUNNER_TEMP/apatch-signing.jks"
+          export KEYSTORE_FILE="$RUNNER_TEMP/apatch-signing.jks"
+          SIGNED=$(bash .github/scripts/sign_v2_only.sh app/build/outputs/apk/release | tail -n 1)
+          echo "signedReleaseFile=$SIGNED" >> "$GITHUB_OUTPUT"
+          echo "signedReleaseFile0=$SIGNED" >> "$GITHUB_OUTPUT"
+          echo "signedReleaseFiles=$SIGNED" >> "$GITHUB_OUTPUT"
+          echo "nofSignedReleaseFiles=1" >> "$GITHUB_OUTPUT"
+
+      - name: Sign Debug APK (v2 only)
+        id: sign_debug_app
+        if: ${{ env.SIGNING_KEY != '' }}
+        continue-on-error: true
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          BUILD_TOOLS_VERSION: ${{ env.BUILD_TOOL_VERSION }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "$SIGNING_KEY" | base64 -d > "$RUNNER_TEMP/apatch-signing.jks"
+          export KEYSTORE_FILE="$RUNNER_TEMP/apatch-signing.jks"
+          SIGNED=$(bash .github/scripts/sign_v2_only.sh app/build/outputs/apk/debug | tail -n 1)
+          echo "signedReleaseFile=$SIGNED" >> "$GITHUB_OUTPUT"
+          echo "signedReleaseFile0=$SIGNED" >> "$GITHUB_OUTPUT"
+          echo "signedReleaseFiles=$SIGNED" >> "$GITHUB_OUTPUT"
+          echo "nofSignedReleaseFiles=1" >> "$GITHUB_OUTPUT"
+
+      - name: Upload mappings
+        uses: actions/upload-artifact@v7
+        with:
+          name: "mappings"
+          path: "app/build/outputs/mapping/release/"
+
+      - name: Upload build artifact1
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+        if: ${{ env.SIGNING_KEY != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: APatch-Release
+          path: |
+            ${{ steps.sign_app.outputs.signedReleaseFile }}
+
+      - name: Upload build artifact2
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+        if: ${{ env.SIGNING_KEY != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: APatch-Debug
+          path: |
+            ${{ steps.sign_debug_app.outputs.signedReleaseFile }}
+
+      # - name: Release apk
+        # env:
+          # SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+        # if: ${{ env.SIGNING_KEY != '' && github.ref_type == 'tag' }}
+        # continue-on-error: true
+        # uses: ncipollo/release-action@v1
+        # with:
+          # token: ${{ github.token }}
+          # tag: ${{ steps.parse_version.outputs.VERSION }}
+          # artifacts: ${{steps.sign_app.outputs.signedReleaseFile}}
+          # generateReleaseNotes: true
+          # makeLatest: true
+          # replacesArtifacts: true
+
+      # 新增：手动创建并推送tag（替代旧版 createTag: true）
+      - name: Create git tag
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+        if: env.SIGNING_KEY != '' && github.event_name != 'pull_request'
+        run: |
+          TAG_NAME="${{ steps.parse_version.outputs.VERSION }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git rev-parse "tags/$TAG_NAME" >/dev/null 2>&1; then
+            git tag "$TAG_NAME"
+            git push origin "tags/$TAG_NAME"
+          fi
+
+      - name: Release apk
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+        if: env.SIGNING_KEY != '' && github.event_name != 'pull_request'
+        continue-on-error: true
+        uses: ncipollo/release-action@v1
+        with:
+          token: ${{ github.token }}
+          tag: ${{ steps.parse_version.outputs.VERSION }}
+          artifacts: app/build/outputs/apk/release/*.apk
+          generateReleaseNotes: true
+          makeLatest: true
+          replacesArtifacts: true
