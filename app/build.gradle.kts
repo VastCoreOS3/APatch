@@ -59,7 +59,7 @@ android {
     buildToolsVersion = androidBuildToolsVersion
 
     defaultConfig {
-	applicationId = "com.example.apatch"
+	applicationId = "me.bmax.apatch.mdmix"
         minSdk = androidMinSdkVersion
         targetSdk = androidTargetSdkVersion
         versionCode = managerVersionCode
