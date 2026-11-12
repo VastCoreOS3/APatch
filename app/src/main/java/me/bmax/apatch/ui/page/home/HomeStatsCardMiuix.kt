@@ -95,7 +95,8 @@ fun KStatusCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(IntrinsicSize.Min),
+                // .height(IntrinsicSize.Min),
+                .height(140.dp), // 固定高度140dp
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
