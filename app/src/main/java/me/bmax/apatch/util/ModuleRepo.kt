@@ -4,7 +4,6 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import me.bmax.apatch.apApp
-import me.bmax.apatch.Natives
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import org.json.JSONArray
@@ -28,7 +27,7 @@ object ModuleRepo {
 
     // 由上层 ViewModel 传入模块类型
     var globalModuleType: String = ""
-    private fun getApiToken(): String = Natives.getApiToken(apApp)
+
     private fun getAppLang(): String {
         val lang = Locale.getDefault().language
         return if (lang == "zh") "zh" else "en"
@@ -71,7 +70,7 @@ object ModuleRepo {
         fun descriptionText(locale: Locale = Locale.getDefault()): String = localized(description, locale)
     }
 
-    /** Reads one page of the catalogue. [kpm] filters by category when non-null. */
+    /** Reads one page of the catalogue. [kpm] filters by category when non‑null. */
     suspend fun listModules(
         page: Int = 1,
         perPage: Int = PAGE_SIZE,
@@ -82,7 +81,7 @@ object ModuleRepo {
             .addQueryParameter("action", "list")
             .addQueryParameter("type", globalModuleType)
             .addQueryParameter("lang", getAppLang())
-            .addQueryParameter("token", getApiToken())
+            .addQueryParameter("token", me.bmax.apatch.Natives.getApiToken(apApp))
             .addQueryParameter("page", page.toString())
             .addQueryParameter("per_page", perPage.toString())
             .apply {
@@ -114,7 +113,7 @@ object ModuleRepo {
             .addQueryParameter("action", "info")
             .addQueryParameter("type", globalModuleType)
             .addQueryParameter("lang", getAppLang())
-            .addQueryParameter("token", getApiToken())
+            .addQueryParameter("token", me.bmax.apatch.Natives.getApiToken(apApp))
             .addQueryParameter("id", id)
             .apply { if (kpm) addQueryParameter("kpm", "1") }
             .build()
@@ -128,7 +127,7 @@ object ModuleRepo {
                 .addQueryParameter("action", "info")
                 .addQueryParameter("type", globalModuleType)
                 .addQueryParameter("lang", getAppLang())
-                .addQueryParameter("token", getApiToken())
+                .addQueryParameter("token", me.bmax.apatch.Natives.getApiToken(apApp))
                 .addQueryParameter("id", id)
                 .apply { if (kpm) addQueryParameter("kpm", "1") }
                 .build()
@@ -163,7 +162,7 @@ object ModuleRepo {
             .addQueryParameter("action", "download")
             .addQueryParameter("type", globalModuleType)
             .addQueryParameter("lang", getAppLang())
-            .addQueryParameter("token", getApiToken())
+            .addQueryParameter("token", me.bmax.apatch.Natives.getApiToken(apApp))
             .addQueryParameter("id", id)
         if (kpm) builder.addQueryParameter("kpm", "1")
         return builder.build().toString()
