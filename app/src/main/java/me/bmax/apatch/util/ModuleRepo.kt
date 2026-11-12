@@ -4,6 +4,7 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import me.bmax.apatch.apApp
+import me.bmax.apatch.Natives
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import org.json.JSONArray
@@ -16,12 +17,8 @@ import kotlin.math.roundToInt
 private const val TAG = "ModuleRepo"
 
 /**
- * Client for the community module repository (https://repo.apatch.dev).
- *
- * The service publishes a catalogue: every entry names the module and, once its
- * author has set one, the address of the `module.json` document that carries the
- * details (version, download address, description). The document is served
- * verbatim, so parsing it is the client's job — that is what [RepoModuleDoc] is.
+ * Client for folk single entry php api: https://folk.mysqil.com/api/modules.php
+ * All request use this single url, distinguished by action param.
  */
 object ModuleRepo {
     const val BASE_URL = "https://folk.mysqil.com/api/modules.php"
@@ -29,17 +26,20 @@ object ModuleRepo {
     /** How many catalogue entries are read per request. */
     const val PAGE_SIZE = 30
 
-    /** One entry of `GET /api/modules`. */
+    // 由上层 ViewModel 传入模块类型
+    var globalModuleType: String = ""
+    private fun getApiToken(): String = Natives.getApiToken(apApp)
+    private fun getAppLang(): String {
+        val lang = Locale.getDefault().language
+        return if (lang == "zh") "zh" else "en"
+    }
+
+    /** One entry of list action */
     data class RepoModule(
         val id: String,
         val kpm: Boolean,
         val author: String,
         val description: String,
-        /**
-         * The pointed repository's star count, rounded to two significant digits
-         * by the service; 0 when it points at no repository or the count has not
-         * been read yet.
-         */
         val stars: Int = 0,
     )
 
@@ -50,7 +50,7 @@ object ModuleRepo {
         val unavailable: Boolean = false,
     )
 
-    /** A module's `module.json`, as served by `/m/<id>/info`. */
+    /** A module's module.json info */
     data class RepoModuleDoc(
         val moduleId: String,
         val name: String,
@@ -78,7 +78,11 @@ object ModuleRepo {
         kpm: Boolean? = null,
         search: String = "",
     ): List<RepoModule> = withContext(Dispatchers.IO) {
-        val url = "$BASE_URL/api/modules".toHttpUrl().newBuilder()
+        val url = BASE_URL.toHttpUrl().newBuilder()
+            .addQueryParameter("action", "list")
+            .addQueryParameter("type", globalModuleType)
+            .addQueryParameter("lang", getAppLang())
+            .addQueryParameter("token", getApiToken())
             .addQueryParameter("page", page.toString())
             .addQueryParameter("per_page", perPage.toString())
             .apply {
@@ -103,41 +107,35 @@ object ModuleRepo {
         }
     }
 
-    /**
-     * Reads a module's document. Null when the module is unknown, has no pointer
-     * set yet, or the service could not fetch it.
-     */
     suspend fun moduleDoc(module: RepoModule): RepoModuleDoc? = moduleDoc(module.id, module.kpm)
 
     suspend fun moduleDoc(id: String, kpm: Boolean): RepoModuleDoc? = withContext(Dispatchers.IO) {
-        val url = "$BASE_URL/m/$id/info".toHttpUrl().newBuilder()
+        val url = BASE_URL.toHttpUrl().newBuilder()
+            .addQueryParameter("action", "info")
+            .addQueryParameter("type", globalModuleType)
+            .addQueryParameter("lang", getAppLang())
+            .addQueryParameter("token", getApiToken())
+            .addQueryParameter("id", id)
             .apply { if (kpm) addQueryParameter("kpm", "1") }
             .build()
         val body = get(url.toString()) ?: return@withContext null
         parseDoc(body)
     }
 
-    /** Like [moduleDoc], but keeps the reason a document is not usable. */
     suspend fun moduleDocResult(id: String, kpm: Boolean): ModuleDocResult =
         withContext(Dispatchers.IO) {
-            val url = "$BASE_URL/m/$id/info".toHttpUrl().newBuilder()
+            val url = BASE_URL.toHttpUrl().newBuilder()
+                .addQueryParameter("action", "info")
+                .addQueryParameter("type", globalModuleType)
+                .addQueryParameter("lang", getAppLang())
+                .addQueryParameter("token", getApiToken())
+                .addQueryParameter("id", id)
                 .apply { if (kpm) addQueryParameter("kpm", "1") }
                 .build()
             val body = get(url.toString()) ?: return@withContext ModuleDocResult(null)
             parseDocResult(body)
         }
 
-    /**
-     * Downloads a module's file, trying the address the document names first and
-     * falling back to the repository's own relay.
-     *
-     * The relay is the fallback rather than the primary because a direct download
-     * costs the repository nothing and is one hop shorter. It is also the reason
-     * the fallback exists at all: authors publish `http://` links, and the app's
-     * network policy refuses cleartext before a byte is exchanged, so those links
-     * can only be served by the relay. Such an address is skipped rather than
-     * retried as `https`, which is what a host may or may not serve.
-     */
     suspend fun downloadModuleFile(
         id: String,
         kpm: Boolean,
@@ -155,22 +153,22 @@ object ModuleRepo {
         candidates += downloadUrl(id, kpm)
         for (url in candidates) {
             downloadToCache(url, fileName, cancel, onProgress)?.let { return it }
-            // A cancelled download is the user's decision, not a failed address:
-            // moving on to the fallback would start over what they just stopped.
             if (cancel?.isCancelled == true) return null
         }
         return null
     }
 
-    /**
-     * The repository's relay address for a module's file: the service streams the
-     * bytes its document points at, so a client that cannot reach the author's
-     * host (or may not, over cleartext) can still download the module.
-     */
-    fun downloadUrl(id: String, kpm: Boolean): String =
-        "$BASE_URL/m/$id/download.zip" + if (kpm) "?kpm=1" else ""
+    fun downloadUrl(id: String, kpm: Boolean): String {
+        val builder = BASE_URL.toHttpUrl().newBuilder()
+            .addQueryParameter("action", "download")
+            .addQueryParameter("type", globalModuleType)
+            .addQueryParameter("lang", getAppLang())
+            .addQueryParameter("token", getApiToken())
+            .addQueryParameter("id", id)
+        if (kpm) builder.addQueryParameter("kpm", "1")
+        return builder.build().toString()
+    }
 
-    /** Parses a `module.json` document; null when it is not valid JSON. */
     fun parseDoc(body: String): RepoModuleDoc? = runCatching {
         val obj = JSONObject(body)
         if (obj.has("error")) return null
@@ -210,12 +208,6 @@ object ModuleRepo {
         )
     }
 
-    /**
-     * Renders a star count the way the repository's own pages do — `7`, `99`,
-     * `120`, `4.3k`, `12k`, `990k`, `1.2M` — so the app and the site never show
-     * two different numbers for the same module. The value is already rounded to
-     * two significant digits by the service; this only picks the suffix.
-     */
     fun formatStars(stars: Int): String = when {
         stars < 1000 -> stars.toString()
         stars < 1_000_000 -> {
@@ -230,10 +222,6 @@ object ModuleRepo {
         return if (tenths % 10 == 0) (tenths / 10).toString() else "%.1f".format(Locale.ROOT, tenths / 10.0)
     }
 
-    /**
-     * Whether [remote] is a release other than the installed one. A version code
-     * is preferred when both sides have one; otherwise the version text decides.
-     */
     fun isNewerVersion(remote: RepoModuleDoc, installedVersion: String, installedVersionCode: Int): Boolean {
         if (remote.versionCode > 0 && installedVersionCode > 0) {
             return remote.versionCode > installedVersionCode
