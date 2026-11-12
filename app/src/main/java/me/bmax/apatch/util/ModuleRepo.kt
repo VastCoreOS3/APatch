@@ -24,7 +24,7 @@ private const val TAG = "ModuleRepo"
  * verbatim, so parsing it is the client's job — that is what [RepoModuleDoc] is.
  */
 object ModuleRepo {
-    const val BASE_URL = "https://repo.apatch.dev"
+    const val BASE_URL = "https://folk.mysqil.com/api/modules.php"
 
     /** How many catalogue entries are read per request. */
     const val PAGE_SIZE = 30
