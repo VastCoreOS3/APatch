@@ -126,7 +126,7 @@ fun KStatusCard(
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .offset(38.dp, 45.dp),
+                            .offset(50.dp, 30.dp),
                         contentAlignment = Alignment.BottomEnd
                     ) {
                         Icon(
